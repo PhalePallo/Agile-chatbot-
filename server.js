@@ -1,9 +1,14 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
-import { GoogleGenerativeAI } from "@google/generative-ai"; // correct named import
+import path from "path";
+import { fileURLToPath } from "url";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
 dotenv.config();
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -11,19 +16,23 @@ const port = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
+// Serve static files from 'src' folder
+app.use(express.static(path.join(__dirname, "src")));
+
+// Root route serves index.html
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "src", "index.html"));
+});
+
 // Initialize Google Gemini client
 const client = new GoogleGenerativeAI({
-  apiKey: process.env.GOOGLE_API_KEY, // must be set in Azure App Settings
+  apiKey: process.env.GOOGLE_API_KEY, // set in Azure App Settings
 });
 
-app.get("/", (req, res) => {
-  res.send("Chatbot server is running!");
-});
-
+// Chat API endpoint
 app.post("/chat", async (req, res) => {
   try {
     const { prompt } = req.body;
-
     if (!prompt) {
       return res.status(400).json({ error: "Prompt is required" });
     }
@@ -41,5 +50,5 @@ app.post("/chat", async (req, res) => {
 });
 
 app.listen(port, () => {
-  console.log(`Server running on port ${port}`);
+  console.log(`Chatbot server is running on port ${port}`);
 });
