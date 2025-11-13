@@ -11,64 +11,69 @@ dotenv.config();
 const app = express();
 const port = process.env.PORT || 3000;
 
+// Ensure the API key is set
+if (!process.env.GOOGLE_API_KEY) {
+    console.error("❌ GOOGLE_API_KEY is not set in environment variables!");
+    process.exit(1);
+}
+
 // Initialize Google GenAI client
-const ai = new GoogleGenAI({});
+const ai = new GoogleGenAI({ apiKey: process.env.GOOGLE_API_KEY });
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Store active chat sessions
+// In-memory session store
 const chatSessions = new Map();
 
 // Middleware
 app.use(cors());
 app.use(express.json());
-
-// ✅ Serve static files (HTML, CSS, JS) from 'src'
 app.use(express.static(path.join(__dirname, "src")));
 
-// Gemini Chat API Endpoint
+// Chat API Endpoint
 app.post("/api/chat", async (req, res) => {
-    try {
-        const { message, sessionId } = req.body;
+    const { message, sessionId } = req.body;
 
-        if (!message || !sessionId) {
-            return res.status(400).json({ error: "Missing message or sessionId" });
-        }
+    if (!message || !sessionId) {
+        return res.status(400).json({ error: "Missing message or sessionId" });
+    }
 
-        let chat = chatSessions.get(sessionId);
+    let chat = chatSessions.get(sessionId);
 
-        // Create new session if one doesn’t exist
-        if (!chat) {
+    // Create a new session if it doesn’t exist
+    if (!chat) {
+        try {
             chat = ai.chats.create({
                 model: "gemini-2.5-flash",
                 config: {
                     systemInstruction:
-                        "You are an expert Code Assistant. Your primary function is to answer programming and coding-related questions. Keep your responses concise, helpful, and formatted clearly using markdown code blocks.",
+                        "You are an expert Code Assistant. Keep responses concise, helpful, and formatted using markdown.",
                 },
             });
             chatSessions.set(sessionId, chat);
-            console.log(`New chat session created: ${sessionId}`);
+            console.log(`🆕 New chat session created: ${sessionId}`);
+        } catch (err) {
+            console.error("❌ Failed to create chat session:", err);
+            return res.status(500).json({ reply: "⚠️ Could not initialize AI session." });
         }
+    }
 
-        // Send user message and get AI reply
+    try {
         const result = await chat.sendMessage({ message });
-        const aiReply = result.text;
-
-        res.json({ reply: aiReply });
-
-    } catch (error) {
-        console.error("❌ Server error during chat:", error);
+        res.json({ reply: result.text });
+    } catch (err) {
+        console.error("❌ AI message error:", err);
         res.status(500).json({ reply: "⚠️ Error connecting to the AI server." });
     }
 });
 
-// ✅ Serve index.html
+// Serve index.html
 app.get("/", (req, res) => {
     res.sendFile(path.join(__dirname, "src", "index.html"));
 });
 
-// ✅ Fallback route
+// Fallback route
 app.use((req, res) => {
     res.status(404).sendFile(path.join(__dirname, "src", "index.html"));
 });
