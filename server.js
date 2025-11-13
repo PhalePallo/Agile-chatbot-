@@ -1,36 +1,62 @@
-<?xml version="1.0" encoding="utf-8"?>
-<configuration>
-  <system.webServer>
-    <!-- Use iisnode to run server.js -->
-    <handlers>
-      <add name="iisnode" path="server.js" verb="*" modules="iisnode" resourceType="Unspecified" />
-    </handlers>
+// server.js
+import express from "express";
+import cors from "cors";
+import dotenv from "dotenv";
+import path from "path";
 
-    <!-- Rewrite all requests to server.js so Express handles routes -->
-    <rewrite>
-      <rules>
-        <rule name="NodeJS_Route_All" stopProcessing="true">
-          <match url=".*" />
-          <action type="Rewrite" url="server.js" />
-        </rule>
-      </rules>
-    </rewrite>
+dotenv.config();
 
-    <!-- iisnode settings -->
-    <iisnode 
-      node_env="production" 
-      devErrorsEnabled="true"
-      loggingEnabled="true"
-      maxConcurrentRequestsPerProcess="1024"
-    />
+const app = express();
+const port = process.env.PORT || 3000;
 
-    <!-- Serve static content correctly -->
-    <staticContent>
-      <mimeMap fileExtension=".js" mimeType="application/javascript" />
-      <mimeMap fileExtension=".css" mimeType="text/css" />
-      <mimeMap fileExtension=".html" mimeType="text/html" />
-      <mimeMap fileExtension=".json" mimeType="application/json" />
-      <mimeMap fileExtension=".svg" mimeType="image/svg+xml" />
-    </staticContent>
-  </system.webServer>
-</configuration>
+app.use(cors());
+app.use(express.json());
+
+// Serve static frontend from "src" folder
+app.use(express.static(path.join(process.cwd(), "src")));
+app.get("/", (req, res) => {
+  res.sendFile(path.join(process.cwd(), "src", "index.html"));
+});
+
+// Optional: Health check
+app.get("/health", (req, res) => res.send("ok"));
+
+// Chat API endpoint
+app.post("/api/chat", async (req, res) => {
+  const { message, sessionId } = req.body;
+  if (!message || !sessionId) {
+    return res.status(400).json({ error: "Missing message or sessionId" });
+  }
+
+  if (!process.env.GOOGLE_API_KEY) {
+    return res.status(503).json({
+      reply:
+        "⚠️ AI backend not configured. Set GOOGLE_API_KEY in App Settings.",
+    });
+  }
+
+  try {
+    // Import Google client dynamically
+    const { GoogleGenerativeAI } = await import("@google/generative-ai");
+    const client = new GoogleGenerativeAI({ apiKey: process.env.GOOGLE_API_KEY });
+
+    const response = await client.generateText({
+      model: "chat-bison-001",
+      prompt: message,
+    });
+
+    res.json({ reply: response.text || "No reply from AI." });
+  } catch (err) {
+    console.error("Error calling AI backend:", err);
+    res.status(500).json({ reply: "⚠️ Server error contacting AI backend." });
+  }
+});
+
+// Fallback for SPA routing
+app.use((req, res) => {
+  res.sendFile(path.join(process.cwd(), "src", "index.html"));
+});
+
+app.listen(port, () => {
+  console.log(`Server running on port ${port}`);
+});
