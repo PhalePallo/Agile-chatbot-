@@ -7,29 +7,26 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 
 dotenv.config();
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
 const app = express();
 const port = process.env.PORT || 3000;
 
+// Resolve __dirname in ES module
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Middleware
 app.use(cors());
 app.use(express.json());
 
-// Serve static files from 'src' folder
+// Serve static files from src folder
 app.use(express.static(path.join(__dirname, "src")));
-
-// Root route serves index.html
-app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "src", "index.html"));
-});
 
 // Initialize Google Gemini client
 const client = new GoogleGenerativeAI({
-  apiKey: process.env.GOOGLE_API_KEY, // set in Azure App Settings
+  apiKey: process.env.GOOGLE_API_KEY,
 });
 
-// Chat API endpoint
+// Route API
 app.post("/chat", async (req, res) => {
   try {
     const { prompt } = req.body;
@@ -49,6 +46,11 @@ app.post("/chat", async (req, res) => {
   }
 });
 
+// Default route to serve index.html
+app.get("*", (req, res) => {
+  res.sendFile(path.join(__dirname, "src", "index.html"));
+});
+
 app.listen(port, () => {
-  console.log(`Chatbot server is running on port ${port}`);
+  console.log(`Server running on port ${port}`);
 });
