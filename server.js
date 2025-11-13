@@ -14,98 +14,112 @@ const port = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
-app.use(express.static(path.join(__dirname, "src"))); // serve UI from src
+app.use(express.static(path.join(__dirname, "src"))); // serve index.html, script.js, style.css
 
-// Try to import the installed Google client (you have @google/generative-ai installed)
+// Graceful logging for uncaught errors so we can see the cause in Log Stream
+process.on("uncaughtException", (err) => {
+  console.error("UNCAUGHT EXCEPTION:", err && err.stack ? err.stack : err);
+  // allow process to exit so Azure restarts it; still log first
+  process.exit(1);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("UNHANDLED REJECTION:", reason && reason.stack ? reason.stack : reason);
+  process.exit(1);
+});
+
+// dynamic import of google client to avoid hard crash if shapes differ
 let googleClient = null;
-try {
-  const mod = await import("@google/generative-ai").catch(() => null);
-  if (mod) {
+let clientInfo = { loaded: false, keys: [] };
+
+async function initGoogleClient() {
+  try {
+    const mod = await import("@google/generative-ai").catch(() => null);
+    if (!mod) {
+      console.warn("@google/generative-ai package not found in node_modules");
+      return;
+    }
+
+    // try common named export
     const GoogleGenerativeAI = mod.GoogleGenerativeAI ?? mod.default ?? mod;
     try {
       googleClient = new GoogleGenerativeAI({ apiKey: process.env.GOOGLE_API_KEY });
-      console.log("Google client initialized: @google/generative-ai");
-    } catch (err) {
-      // if instantiation fails, still keep the module for inspection
+      clientInfo.loaded = true;
+      clientInfo.keys = Object.keys(googleClient).slice(0, 100);
+      console.log("Google client initialized:", "@google/generative-ai", clientInfo.keys);
+    } catch (e) {
+      // maybe module exports are different; store available keys for debugging
+      clientInfo.loaded = false;
+      clientInfo.keys = Object.keys(GoogleGenerativeAI || {}).slice(0, 100);
+      console.warn("Google module imported but instantiation failed. Available keys:", clientInfo.keys, e && e.message);
+      // keep 'googleClient' as the module (so we can try alternate call shapes)
       googleClient = GoogleGenerativeAI;
-      console.warn("Google module loaded but could not instantiate — will attempt method calls dynamically.");
     }
-  } else {
-    console.warn("@google/generative-ai not found in node_modules");
+  } catch (err) {
+    console.error("Error importing google client:", err && err.stack ? err.stack : err);
   }
-} catch (e) {
-  console.error("Error importing Google SDK:", e && e.message ? e.message : e);
 }
 
-// In-memory chat sessions
-const chatSessions = new Map();
+// initialize client at startup (non-blocking)
+initGoogleClient().catch((e) => console.error("initGoogleClient error:", e));
 
-// Important: endpoint that matches your front-end fetch('/api/chat', ...)
+// simple health check
+app.get("/health", (req, res) => res.send("ok"));
+
+// Serve root (index.html in src)
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "src", "index.html"));
+});
+
+// The endpoint your front-end calls (script.js expects /api/chat)
 app.post("/api/chat", async (req, res) => {
   try {
     const { message, sessionId } = req.body;
-    if (!message || !sessionId) {
-      return res.status(400).json({ error: "Missing message or sessionId" });
-    }
-
-    // ensure session exists
-    if (!chatSessions.has(sessionId)) {
-      chatSessions.set(sessionId, []);
-      console.log(`New session created: ${sessionId}`);
-    }
+    if (!message || !sessionId) return res.status(400).json({ error: "Missing message or sessionId" });
 
     if (!googleClient) {
-      console.error("Google client missing. Ensure GOOGLE_API_KEY is set and package installed.");
-      return res.status(500).json({
-        reply:
-          "⚠️ Server not configured to call the AI provider. Check server logs and ensure GOOGLE_API_KEY app setting and the @google package are present.",
-      });
+      console.error("No google client available. Ensure package is installed and GOOGLE_API_KEY configured.");
+      return res.status(500).json({ reply: "⚠️ AI backend not configured. Check server logs." });
     }
 
-    // Attempt common call shapes for @google/generative-ai
-    // 1) client.generateText(...)
+    // Try common SDK shapes: generateText, responses.generate, generate, chat or createChat...
     if (typeof googleClient.generateText === "function") {
-      const result = await googleClient.generateText({ model: "chat-bison-001", prompt: message });
-      const aiText = result?.text ?? result?.output ?? JSON.stringify(result);
-      chatSessions.get(sessionId).push({ user: message, ai: aiText });
-      return res.json({ reply: aiText });
+      const r = await googleClient.generateText({ model: "chat-bison-001", prompt: message });
+      const text = r?.text ?? JSON.stringify(r);
+      return res.json({ reply: text });
     }
 
-    // 2) client.responses.generate(...)
     if (googleClient.responses && typeof googleClient.responses.generate === "function") {
-      const response = await googleClient.responses.generate({ model: "models/chat-bison-001", input: message });
-      let aiText = null;
-      if (typeof response?.outputText === "string") aiText = response.outputText;
-      else if (response?.output?.length) aiText = response.output.map(o => o.content?.map(c => c.text).join("") ?? "").join("\n");
-      else aiText = JSON.stringify(response);
-      chatSessions.get(sessionId).push({ user: message, ai: aiText });
-      return res.json({ reply: aiText });
+      const r = await googleClient.responses.generate({ model: "models/chat-bison-001", input: message });
+      // try multiple response field shapes
+      const text = r?.outputText ?? r?.output?.map(o => o.content?.map(c => c.text).join("") ?? "").join("\n") ?? JSON.stringify(r);
+      return res.json({ reply: text });
     }
 
-    // 3) fallback: try calling a 'generate' or 'create' function if available
     if (typeof googleClient.generate === "function") {
       const r = await googleClient.generate({ model: "chat-bison-001", prompt: message });
-      const aiText = r?.text ?? JSON.stringify(r);
-      chatSessions.get(sessionId).push({ user: message, ai: aiText });
-      return res.json({ reply: aiText });
+      const text = r?.text ?? JSON.stringify(r);
+      return res.json({ reply: text });
     }
 
-    // If no known method matched:
-    console.error("No compatible method found on googleClient. Keys:", Object.keys(googleClient || {}).slice(0, 50));
-    return res.status(500).json({
-      reply: "⚠️ AI client found but no compatible method detected. Check server logs for available client methods.",
-    });
+    // last attempt: if the module itself is a function
+    if (typeof googleClient === "function") {
+      const r = await googleClient({ model: "chat-bison-001", prompt: message });
+      const text = r?.text ?? JSON.stringify(r);
+      return res.json({ reply: text });
+    }
+
+    console.error("No compatible method found on googleClient. Keys:", clientInfo.keys);
+    return res.status(500).json({ reply: "⚠️ AI client loaded but no usable method found. Check logs." });
+
   } catch (err) {
-    console.error("Server error during /api/chat:", err && err.stack ? err.stack : err);
+    console.error("Error generating response:", err && err.stack ? err.stack : err);
     return res.status(500).json({ reply: "⚠️ Error connecting to the AI server." });
   }
 });
 
-// Serve index.html for SPA fallback (so direct page loads work)
+// SPA fallback for client-side routes
 app.get("*", (req, res) => {
   res.sendFile(path.join(__dirname, "src", "index.html"));
 });
 
-app.listen(port, () => {
-  console.log(`🚀 Server running on port ${port}`);
-});
+app.listen(port, () => console.log(`Server running on port ${port}`));
