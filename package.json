@@ -2,20 +2,18 @@
   "name": "chatbot",
   "type": "module",
   "version": "1.0.0",
-  "description": "",
+  "description": "AI-powered chatbot using Google Gemini",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "@google-ai/generativelanguage": "^3.4.1",
-    "@google/genai": "^1.24.0",
-    "@google/generative-ai": "^0.24.1",
-    "axios": "^1.12.2",
+    "@google/generative-ai": "^0.21.0",
     "cors": "^2.8.5",
-    "dotenv": "^17.2.3",
-    "express": "^5.1.0",
-    "node-fetch": "^3.3.2",
-    "uuid": "^13.0.0"
+    "dotenv": "^16.4.5",
+    "express": "^4.21.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
