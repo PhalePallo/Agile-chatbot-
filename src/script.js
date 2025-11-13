@@ -1,7 +1,3 @@
-// ============================
-// CHATBOT SCRIPT
-// ============================
-
 document.addEventListener("DOMContentLoaded", () => {
 
     const newChatBtn = document.getElementById("newChatBtn");
@@ -17,9 +13,6 @@ document.addEventListener("DOMContentLoaded", () => {
     let chatSessionId = null;
     let allChats = JSON.parse(localStorage.getItem("chatHistory")) || [];
 
-    // ============================
-    // OPEN/CLOSE MODAL
-    // ============================
     if (newChatBtn) {
         newChatBtn.addEventListener("click", () => {
             if (chatModal) chatModal.style.display = "flex";
@@ -37,9 +30,6 @@ document.addEventListener("DOMContentLoaded", () => {
         if (e.target === chatModal) chatModal.style.display = "none";
     });
 
-    // ============================
-    // CHAT FUNCTIONS
-    // ============================
     function startNewChat() {
         if (!chatContainer) return;
         chatContainer.innerHTML = "";
@@ -75,7 +65,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
     function renderChatCards() {
         if (!bodyContent) return;
-
         document.querySelectorAll(".text-box").forEach(el => el.remove());
 
         allChats.forEach(chat => {
@@ -88,9 +77,6 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     }
 
-    // ============================
-    // MESSAGE HANDLING
-    // ============================
     function displayMessage(sender, content) {
         if (!chatContainer) return;
         const messageDiv = document.createElement("div");
@@ -139,17 +125,15 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!isCodingRelated(userMessage)) {
             return { reply: "🚫 I'm only able to answer coding-related questions." };
         }
-
         try {
-            const response = await fetch(`${window.location.origin}/api/chat`, {
+            const response = await fetch(`${window.location.origin}/chat`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ prompt: userMessage }) // matches server.js
+                body: JSON.stringify({ prompt: userMessage })
             });
             const data = await response.json();
             return { reply: data.reply ?? "⚠️ No response from AI." };
-        } catch (err) {
-            console.error("AI fetch error:", err);
+        } catch {
             return { reply: "⚠️ Error connecting to the AI server." };
         }
     }
@@ -159,13 +143,11 @@ document.addEventListener("DOMContentLoaded", () => {
         return allowedTopics.some(topic => message.toLowerCase().includes(topic));
     }
 
-    // ============================
-    // EVENT LISTENERS
-    // ============================
     if (sendBtn) sendBtn.addEventListener("click", sendMessage);
     if (userInput) userInput.addEventListener("keypress", e => {
         if (e.key === "Enter") { e.preventDefault(); sendMessage(); }
     });
 
     renderChatCards();
+
 });
