@@ -3,123 +3,139 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import path from "path";
-import { fileURLToPath } from "url";
 
 dotenv.config();
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 const app = express();
 const port = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
-app.use(express.static(path.join(__dirname, "src"))); // serve index.html, script.js, style.css
 
-// Graceful logging for uncaught errors so we can see the cause in Log Stream
-process.on("uncaughtException", (err) => {
-  console.error("UNCAUGHT EXCEPTION:", err && err.stack ? err.stack : err);
-  // allow process to exit so Azure restarts it; still log first
-  process.exit(1);
-});
-process.on("unhandledRejection", (reason) => {
-  console.error("UNHANDLED REJECTION:", reason && reason.stack ? reason.stack : reason);
-  process.exit(1);
-});
+// Serve static frontend (index.html, script.js, style.css) from "src"
+app.use(express.static(path.join(process.cwd(), "src")));
 
-// dynamic import of google client to avoid hard crash if shapes differ
+// Try to initialise Google client if package is present.
+// We don't assume a particular method exists — we'll try multiple common names and fall back gracefully.
 let googleClient = null;
-let clientInfo = { loaded: false, keys: [] };
+let googleClientName = null;
 
-async function initGoogleClient() {
-  try {
-    const mod = await import("@google/generative-ai").catch(() => null);
-    if (!mod) {
-      console.warn("@google/generative-ai package not found in node_modules");
-      return;
+try {
+  // Try the common named import used in your repo
+  // (note: one of @google packages might be installed; we try-catch to avoid crashing)
+  // eslint-disable-next-line no-unused-vars
+  const maybe = await import("@google/generative-ai").catch(() => null);
+  if (maybe && maybe.GoogleGenerativeAI) {
+    googleClient = new maybe.GoogleGenerativeAI({ apiKey: process.env.GOOGLE_API_KEY });
+    googleClientName = "@google/generative-ai.GoogleGenerativeAI";
+    console.log("Google client initialized: @google/generative-ai (GoogleGenerativeAI)");
+  } else {
+    const maybe2 = await import("@google/genai").catch(() => null);
+    if (maybe2 && maybe2.GoogleGenAI) {
+      googleClient = new maybe2.GoogleGenAI({ apiKey: process.env.GOOGLE_API_KEY });
+      googleClientName = "@google/genai.GoogleGenAI";
+      console.log("Google client initialized: @google/genai (GoogleGenAI)");
+    } else {
+      // try other package that appeared in logs
+      const maybe3 = await import("@google/generative-ai").catch(() => null);
+      if (maybe3 && maybe3.default) {
+        googleClient = new maybe3.default({ apiKey: process.env.GOOGLE_API_KEY });
+        googleClientName = "@google/generative-ai.default";
+        console.log("Google client initialized: @google/generative-ai (default export)");
+      } else {
+        console.log("No recognized Google SDK imported. continuing without a configured AI client.");
+      }
     }
-
-    // try common named export
-    const GoogleGenerativeAI = mod.GoogleGenerativeAI ?? mod.default ?? mod;
-    try {
-      googleClient = new GoogleGenerativeAI({ apiKey: process.env.GOOGLE_API_KEY });
-      clientInfo.loaded = true;
-      clientInfo.keys = Object.keys(googleClient).slice(0, 100);
-      console.log("Google client initialized:", "@google/generative-ai", clientInfo.keys);
-    } catch (e) {
-      // maybe module exports are different; store available keys for debugging
-      clientInfo.loaded = false;
-      clientInfo.keys = Object.keys(GoogleGenerativeAI || {}).slice(0, 100);
-      console.warn("Google module imported but instantiation failed. Available keys:", clientInfo.keys, e && e.message);
-      // keep 'googleClient' as the module (so we can try alternate call shapes)
-      googleClient = GoogleGenerativeAI;
-    }
-  } catch (err) {
-    console.error("Error importing google client:", err && err.stack ? err.stack : err);
   }
+} catch (err) {
+  console.error("Error while importing Google SDK (non-fatal):", err?.message || err);
 }
 
-// initialize client at startup (non-blocking)
-initGoogleClient().catch((e) => console.error("initGoogleClient error:", e));
-
-// simple health check
+// Health route
 app.get("/health", (req, res) => res.send("ok"));
 
-// Serve root (index.html in src)
+// Root route (serve index)
 app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "src", "index.html"));
+  res.sendFile(path.join(process.cwd(), "src", "index.html"));
 });
 
-// The endpoint your front-end calls (script.js expects /api/chat)
+// Main API endpoint that the frontend calls
 app.post("/api/chat", async (req, res) => {
   try {
     const { message, sessionId } = req.body;
-    if (!message || !sessionId) return res.status(400).json({ error: "Missing message or sessionId" });
+    if (!message || !sessionId) {
+      return res.status(400).json({ error: "Missing message or sessionId" });
+    }
 
+    // If no Google client configured, return a helpful message (not a crash).
     if (!googleClient) {
-      console.error("No google client available. Ensure package is installed and GOOGLE_API_KEY configured.");
-      return res.status(500).json({ reply: "⚠️ AI backend not configured. Check server logs." });
+      console.warn("No Google client available in environment.");
+      return res.status(503).json({
+        reply:
+          "⚠️ AI backend not configured on the server. Set the GOOGLE_API_KEY app setting and ensure the correct @google package is installed.",
+      });
     }
 
-    // Try common SDK shapes: generateText, responses.generate, generate, chat or createChat...
+    // Try a few possible SDK call shapes (different versions of SDKs expose different method names).
+    // 1) common name: generateText
     if (typeof googleClient.generateText === "function") {
-      const r = await googleClient.generateText({ model: "chat-bison-001", prompt: message });
-      const text = r?.text ?? JSON.stringify(r);
+      const r = await googleClient.generateText({
+        model: "chat-bison-001",
+        prompt: message,
+      });
+      // shape may differ; try common fields
+      const text = r?.text || r?.output?.text || JSON.stringify(r).slice(0, 1000);
       return res.json({ reply: text });
     }
 
-    if (googleClient.responses && typeof googleClient.responses.generate === "function") {
-      const r = await googleClient.responses.generate({ model: "models/chat-bison-001", input: message });
-      // try multiple response field shapes
-      const text = r?.outputText ?? r?.output?.map(o => o.content?.map(c => c.text).join("") ?? "").join("\n") ?? JSON.stringify(r);
+    // 2) nested text.generate (some SDKs)
+    if (googleClient.text && typeof googleClient.text.generate === "function") {
+      const r = await googleClient.text.generate({
+        model: "chat-bison-001",
+        prompt: message,
+      });
+      const text = r?.output?.[0]?.content?.[0]?.text || r?.text || JSON.stringify(r).slice(0, 1000);
       return res.json({ reply: text });
     }
 
-    if (typeof googleClient.generate === "function") {
-      const r = await googleClient.generate({ model: "chat-bison-001", prompt: message });
-      const text = r?.text ?? JSON.stringify(r);
+    // 3) chat-style APIs
+    if (googleClient.chat && typeof googleClient.chat.create === "function") {
+      const r = await googleClient.chat.create({
+        model: "chat-bison-001",
+        messages: [{ role: "user", content: message }],
+      });
+      const text = r?.choices?.[0]?.message?.content || r?.text || JSON.stringify(r).slice(0, 1000);
       return res.json({ reply: text });
     }
 
-    // last attempt: if the module itself is a function
-    if (typeof googleClient === "function") {
-      const r = await googleClient({ model: "chat-bison-001", prompt: message });
-      const text = r?.text ?? JSON.stringify(r);
-      return res.json({ reply: text });
+    // 4) older genai packages (GoogleGenAI / GoogleGenAI.chats)
+    if (googleClient.chats && typeof googleClient.chats.create === "function") {
+      // some libs create a chat and send messages; adapt if available
+      const chat = await googleClient.chats.create({ model: "gemini-2.5-flash" }).catch(() => null);
+      if (chat && typeof chat.sendMessage === "function") {
+        const r = await chat.sendMessage({ message });
+        const text = r?.text || JSON.stringify(r).slice(0, 1000);
+        return res.json({ reply: text });
+      }
     }
 
-    console.error("No compatible method found on googleClient. Keys:", clientInfo.keys);
-    return res.status(500).json({ reply: "⚠️ AI client loaded but no usable method found. Check logs." });
-
+    // If we reached here, the SDK is present but none of the expected methods were found.
+    console.error("Google SDK present but no recognized generation method found. Available keys:", Object.keys(googleClient || {}));
+    return res.status(500).json({
+      reply:
+        "⚠️ AI SDK is present but not compatible with this server code. Check server logs for available client methods.",
+    });
   } catch (err) {
-    console.error("Error generating response:", err && err.stack ? err.stack : err);
-    return res.status(500).json({ reply: "⚠️ Error connecting to the AI server." });
+    console.error("Server error during /api/chat:", err);
+    return res.status(500).json({ reply: "⚠️ Server error while contacting AI backend." });
   }
 });
 
-// SPA fallback for client-side routes
-app.get("*", (req, res) => {
-  res.sendFile(path.join(__dirname, "src", "index.html"));
+// Fallback - serve SPA index for routes that frontend handles
+app.use((req, res) => {
+  res.status(200).sendFile(path.join(process.cwd(), "src", "index.html"));
 });
 
-app.listen(port, () => console.log(`Server running on port ${port}`));
+app.listen(port, () => {
+  console.log(`Server running on port ${port}`);
+});
