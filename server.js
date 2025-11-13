@@ -41,7 +41,7 @@ app.post("/api/chat", async (req, res) => {
         // Create new session if one doesn't exist
         if (!chat) {
             const model = genAI.getGenerativeModel({ 
-                model: "gemini-pro",
+                model: "gemini-1.5-flash",
                 systemInstruction: "You are an expert Code Assistant. Your primary function is to answer programming and coding-related questions. Keep your responses concise, helpful, and formatted clearly using markdown code blocks."
             });
             
