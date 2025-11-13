@@ -12,7 +12,10 @@ const app = express();
 const port = process.env.PORT || 3000;
 
 // Initialize Google GenAI client
-const ai = new GoogleGenAI({});
+const ai = new GoogleGenAI({
+  apiKey: process.env.GOOGLE_API_KEY,
+});
+
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
