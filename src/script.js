@@ -14,7 +14,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     let currentChat = [];
     let chatCounter = 0;
-    let chatSessionId = null; // Initially null
+    let chatSessionId = null;
     let allChats = JSON.parse(localStorage.getItem("chatHistory")) || [];
 
     // ============================
@@ -40,12 +40,11 @@ document.addEventListener("DOMContentLoaded", () => {
     // ============================
     // CHAT FUNCTIONS
     // ============================
-
     function startNewChat() {
         if (!chatContainer) return;
         chatContainer.innerHTML = "";
         currentChat = [];
-        chatCounter = allChats.length + 1; // Increment based on existing chats
+        chatCounter = allChats.length + 1;
         chatSessionId = `chat_${Date.now()}_${chatCounter}`;
 
         const newChatEntry = {
@@ -77,7 +76,6 @@ document.addEventListener("DOMContentLoaded", () => {
     function renderChatCards() {
         if (!bodyContent) return;
 
-        // Remove old cards
         document.querySelectorAll(".text-box").forEach(el => el.remove());
 
         allChats.forEach(chat => {
@@ -130,7 +128,6 @@ document.addEventListener("DOMContentLoaded", () => {
         displayMessage("ai", aiReply);
         currentChat.push({ sender: "ai", text: aiReply.reply });
 
-        // Update stored chat
         const chatIndex = allChats.findIndex(c => c.id === chatSessionId);
         if (chatIndex > -1) {
             allChats[chatIndex].messages = currentChat;
@@ -142,15 +139,17 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!isCodingRelated(userMessage)) {
             return { reply: "🚫 I'm only able to answer coding-related questions." };
         }
+
         try {
-            const response = await fetch("/api/chat", {
+            const response = await fetch(`${window.location.origin}/api/chat`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ message: userMessage, sessionId: chatSessionId })
+                body: JSON.stringify({ prompt: userMessage }) // matches server.js
             });
             const data = await response.json();
             return { reply: data.reply ?? "⚠️ No response from AI." };
-        } catch {
+        } catch (err) {
+            console.error("AI fetch error:", err);
             return { reply: "⚠️ Error connecting to the AI server." };
         }
     }
@@ -160,8 +159,6 @@ document.addEventListener("DOMContentLoaded", () => {
         return allowedTopics.some(topic => message.toLowerCase().includes(topic));
     }
 
-
-    
     // ============================
     // EVENT LISTENERS
     // ============================
@@ -170,7 +167,5 @@ document.addEventListener("DOMContentLoaded", () => {
         if (e.key === "Enter") { e.preventDefault(); sendMessage(); }
     });
 
-    // Render chat cards on load (without creating new chat)
     renderChatCards();
-
 });
