@@ -1,23 +1,22 @@
-// server.js (resilient startup - use this to avoid crashes when GenAI fails)
+// server.js (resilient startup for Azure Node App)
 import express from "express";
 import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
 import cors from "cors";
 
-// Lazy import / init for Google GenAI (wrapped safely)
+// Lazy import / init for Google GenAI
 let ai = null;
 let genAiError = null;
+
 async function initGenAi() {
   try {
-    // dynamic import so a missing native dependency doesn't crash at module-load time
     const { GoogleGenAI } = await import("@google/genai");
     ai = new GoogleGenAI({});
     console.log("✅ GoogleGenAI client initialized");
   } catch (err) {
     genAiError = err;
-    console.error("❌ GoogleGenAI initialization failed:", err && err.message ? err.message : err);
-    // keep going — we will respond with a friendly error from /api/chat
+    console.error("❌ GoogleGenAI initialization failed:", err?.message ?? err);
   }
 }
 
@@ -29,7 +28,7 @@ const port = process.env.PORT || 3000;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// In-memory sessions
+// In-memory chat sessions
 const chatSessions = new Map();
 
 // Middleware
@@ -37,8 +36,26 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "src")));
 
-// Start GenAI init but don't await — allow server to start fast
+// Start GenAI init asynchronously
 initGenAi().catch(e => console.error("GenAI init unexpected error:", e));
+
+// Helper function to retry GenAI API calls
+async function sendWithRetry(chat, message, retries = 3, delayMs = 1000) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      const result = await chat.sendMessage({ message });
+      return result.text ?? "⚠️ No reply text from AI.";
+    } catch (err) {
+      if (err.status === 503) {
+        console.warn(`GenAI busy, retrying ${i + 1}/${retries}...`);
+        await new Promise(r => setTimeout(r, delayMs * (i + 1)));
+      } else {
+        throw err;
+      }
+    }
+  }
+  return "⚠️ AI model is currently overloaded. Please try again in a few seconds.";
+}
 
 // Chat endpoint
 app.post("/api/chat", async (req, res) => {
@@ -48,17 +65,13 @@ app.post("/api/chat", async (req, res) => {
       return res.status(400).json({ error: "Missing message or sessionId" });
     }
 
-    // If AI client failed to initialize, return helpful message instead of crashing
     if (!ai) {
-      const friendly = {
+      return res.json({
         reply:
-          "⚠️ Chat backend is up but the AI client is not available. This usually means missing credentials or a dependent package failed to load. Check server logs (LogFiles) for details."
-      };
-      console.warn("Responding with fallback because AI client is unavailable:", genAiError?.message ?? "unknown");
-      return res.json(friendly);
+          "⚠️ Chat backend is up but the AI client is not available. Check server logs for details."
+      });
     }
 
-    // Create or reuse a conversation object from the SDK
     let chat = chatSessions.get(sessionId);
     if (!chat) {
       chat = ai.chats.create({
@@ -72,16 +85,18 @@ app.post("/api/chat", async (req, res) => {
       console.log(`New chat session created: ${sessionId}`);
     }
 
-    const result = await chat.sendMessage({ message });
-    const aiReply = result.text ?? "⚠️ No reply text from AI.";
+    const aiReply = await sendWithRetry(chat, message);
     return res.json({ reply: aiReply });
+
   } catch (error) {
     console.error("❌ Server error during /api/chat:", error);
-    return res.status(500).json({ reply: "⚠️ Error connecting to the AI server." });
+    return res.json({
+      reply: "⚠️ Unexpected server error. Please try again."
+    });
   }
 });
 
-// Serve index and fallback
+// Serve main page and fallback for 404
 app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "src", "index.html"));
 });
@@ -93,6 +108,6 @@ app.use((req, res) => {
 app.listen(port, () => {
   console.log(`🚀 Server running on http://localhost:${port} (PORT=${port})`);
   if (genAiError) {
-    console.warn("GoogleGenAI client failed to initialize — check credentials and dependencies.");
+    console.warn("⚠️ GoogleGenAI client failed to initialize — check credentials and dependencies.");
   }
 });
