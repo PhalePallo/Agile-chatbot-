@@ -1,3 +1,7 @@
+// ============================
+// CHATBOT SCRIPT
+// ============================
+
 document.addEventListener("DOMContentLoaded", () => {
 
     const newChatBtn = document.getElementById("newChatBtn");
@@ -10,9 +14,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
     let currentChat = [];
     let chatCounter = 0;
-    let chatSessionId = null;
+    let chatSessionId = null; // Initially null
     let allChats = JSON.parse(localStorage.getItem("chatHistory")) || [];
 
+    // ============================
+    // OPEN/CLOSE MODAL
+    // ============================
     if (newChatBtn) {
         newChatBtn.addEventListener("click", () => {
             if (chatModal) chatModal.style.display = "flex";
@@ -30,11 +37,15 @@ document.addEventListener("DOMContentLoaded", () => {
         if (e.target === chatModal) chatModal.style.display = "none";
     });
 
+    // ============================
+    // CHAT FUNCTIONS
+    // ============================
+
     function startNewChat() {
         if (!chatContainer) return;
         chatContainer.innerHTML = "";
         currentChat = [];
-        chatCounter = allChats.length + 1;
+        chatCounter = allChats.length + 1; // Increment based on existing chats
         chatSessionId = `chat_${Date.now()}_${chatCounter}`;
 
         const newChatEntry = {
@@ -65,6 +76,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
     function renderChatCards() {
         if (!bodyContent) return;
+
+        // Remove old cards
         document.querySelectorAll(".text-box").forEach(el => el.remove());
 
         allChats.forEach(chat => {
@@ -77,6 +90,9 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     }
 
+    // ============================
+    // MESSAGE HANDLING
+    // ============================
     function displayMessage(sender, content) {
         if (!chatContainer) return;
         const messageDiv = document.createElement("div");
@@ -114,6 +130,7 @@ document.addEventListener("DOMContentLoaded", () => {
         displayMessage("ai", aiReply);
         currentChat.push({ sender: "ai", text: aiReply.reply });
 
+        // Update stored chat
         const chatIndex = allChats.findIndex(c => c.id === chatSessionId);
         if (chatIndex > -1) {
             allChats[chatIndex].messages = currentChat;
@@ -126,10 +143,10 @@ document.addEventListener("DOMContentLoaded", () => {
             return { reply: "🚫 I'm only able to answer coding-related questions." };
         }
         try {
-            const response = await fetch(`${window.location.origin}/chat`, {
+            const response = await fetch("/api/chat", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ prompt: userMessage })
+                body: JSON.stringify({ message: userMessage, sessionId: chatSessionId })
             });
             const data = await response.json();
             return { reply: data.reply ?? "⚠️ No response from AI." };
@@ -137,17 +154,38 @@ document.addEventListener("DOMContentLoaded", () => {
             return { reply: "⚠️ Error connecting to the AI server." };
         }
     }
+function isCodingRelated(message) {
+    const allowedTopics = [
+        "code","coding","programming","developer","software","algorithm","api",
+        "debug","bug","function","class","html","css","javascript","python",
+        "java","c#","c++","git","bash","powershell","sql","ruby","react","scss",
+        "bootstrap","c","golang","typescript","swift","php","r"
+    ];
 
-    function isCodingRelated(message) {
-        const allowedTopics = ["code","coding","programming","developer","software","algorithm","api","debug","bug","function","class","html","css","javascript","python","java","c#","c++","git","bash","powershell","sql","ruby","react","scss","bootstrap","c","golang","typescript","swift","php","r"];
-        return allowedTopics.some(topic => message.toLowerCase().includes(topic));
-    }
+    // Convert message to lowercase and remove punctuation for better matching
+    const normalizedMsg = message.toLowerCase().replace(/[^\w\s#\+]/g, "");
 
+    // Split message into words for exact keyword match
+    const words = normalizedMsg.split(/\s+/);
+
+    // Check if at least one allowed topic is present
+    const containsAllowedTopic = words.some(word => allowedTopics.includes(word));
+
+    return containsAllowedTopic;
+}
+
+
+
+    
+    // ============================
+    // EVENT LISTENERS
+    // ============================
     if (sendBtn) sendBtn.addEventListener("click", sendMessage);
     if (userInput) userInput.addEventListener("keypress", e => {
         if (e.key === "Enter") { e.preventDefault(); sendMessage(); }
     });
 
+    // Render chat cards on load (without creating new chat)
     renderChatCards();
 
 });
